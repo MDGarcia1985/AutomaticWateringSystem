@@ -1,7 +1,8 @@
-#include <Arduino.h>    // Standard Arduino library for basic functions
-#include <avr/sleep.h>  // For low-power sleep mode
-#include <avr/wdt.h>    // For Watchdog Timer to manage timed sleep
-#include <util/delay.h> // For precise delays (_delay_ms)
+#include <Arduino.h>                // Standard Arduino library for basic functions
+#include <Sodaq_wdt.h>              // For Watchdog Timer
+#include <Adafruit_LiquidCrystal.h> // For the LCD
+#include <Stepper.h>                // For the Stepper motor
+#include <DHT.h>                    // For the DHT11 sensor
 
 // Pin Definitions
 #define stepperPin1 6      // Stepper Motor IN1 (connected to ULN2003)
@@ -17,8 +18,14 @@
 #define rs 12              // LCD RS pin
 #define en 11              // LCD Enable pin
 
-// Stepper Motor Configuration
+// Configuration
 #define STEPS_PER_REV 200  // Number of steps per revolution for the stepper motor
+#define DHTTYPE DHT11      // Define the DHT sensor type
+
+// Initialize Components
+Adafruit_LiquidCrystal lcd(rs, en, d4, d5, d6, d7); // LCD object
+Stepper stepper(STEPS_PER_REV, stepperPin1, stepperPin3, stepperPin2, stepperPin4); // Stepper motor object
+DHT dht(dhtPin, DHTTYPE); // DHT11 object
 
 // Stepper Motor Position Tracking
 int currentStepperPosition = 0; // Tracks the current position of the stepper motor
@@ -28,158 +35,156 @@ void initializeComponents();                  // Initialize all hardware compone
 void displayReadings(float temp, float hum); // Display temperature and humidity readings
 void waterPlants();                          // Handle the plant watering process
 void goToSleep(unsigned long duration);      // Enter low-power sleep mode for a set duration
-void stepMotor(int steps);                   // Move the stepper motor by a specified number of steps
 void moveStepperTo(int targetPosition);      // Move the stepper motor to a specific position
 void pumpOn();                               // Turn on the water pump
 void pumpOff();                              // Turn off the water pump
-void testComponents();                      // Test all components
+void testComponents();                       // Test all components
 
-int main(void) {
+int main(void)
+{
     init(); // Initialize the Arduino core functionality
     Serial.begin(9600); // Start serial communication for debugging
 
     initializeComponents(); // Set up all hardware components
 
-    while (1) { // Main program loop
+    while (1)
+    {
         testComponents(); // Test hardware components at the start of each loop
 
-        // Simulated DHT sensor readings (replace with actual sensor code)
-        float temp = 25.0; // Example temperature in Celsius
-        float hum = 45.0;  // Example humidity as a percentage
+        // Read sensor values
+        float temp = dht.readTemperature();
+        float hum = dht.readHumidity();
 
         // Check for invalid sensor readings
-        if (isnan(temp) || isnan(hum)) {
-            Serial.println("Sensor error!"); // Display error message on Serial Monitor
-            delay(2000);                    // Wait 2 seconds before retrying
-            goToSleep(600000);              // Sleep for 10 minutes to conserve power
-            continue;                       // Skip the rest of this loop iteration
+        if (isnan(temp) || isnan(hum))
+        {
+            lcd.clear();
+            lcd.print("Sensor error!"); // Display error on LCD
+            delay(2000);               // Wait 2 seconds
+            goToSleep(600000);         // Sleep for 10 minutes
+            continue;                  // Skip this iteration
         }
 
-        displayReadings(temp, hum); // Show temperature and humidity on the Serial Monitor
+        displayReadings(temp, hum); // Show temperature and humidity on the LCD
 
         // Check conditions to determine if watering is needed
-        if (hum < 50 && temp > 15) { // Example thresholds: humidity < 50% and temp > 15°C
-            waterPlants();           // Initiate the watering process
+        if (hum < 50 && temp > 15)
+        { 
+            waterPlants(); // Initiate watering
         }
 
-        goToSleep(600000); // Sleep for 10 minutes to save power
+        goToSleep(600000); // Sleep for 10 minutes
     }
 
     return 0; // This line will never be reached
 }
 
-void initializeComponents() {
-    // Set pin modes for hardware components
-    pinMode(stepperPin1, OUTPUT);
-    pinMode(stepperPin2, OUTPUT);
-    pinMode(stepperPin3, OUTPUT);
-    pinMode(stepperPin4, OUTPUT);
+void initializeComponents()
+{
+    // Initialize pins for the pump
     pinMode(pumpPin, OUTPUT);
+    pumpOff(); // Ensure the pump is initially off
 
-    // Ensure the pump is initially off
+    lcd.begin(16, 2);       // Initialize the LCD
+    lcd.print("System Init"); // Display initialization message
+    delay(2000);
+    lcd.clear();
+    lcd.print("Ready");     // Indicate system is ready
+    delay(1000);
+
+    // Initialize DHT sensor
+    dht.begin();
+
+    // Initialize Stepper Motor
+    stepper.setSpeed(60); // Set stepper motor speed (RPM)
+
+    // Initialize Watchdog Timer
+    sodaq_wdt_enable(WDT_PERIOD_8X); // Enable WDT with an 8-second timeout
+}
+
+void displayReadings(float temp, float hum)
+{
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Temp: ");
+    lcd.print(temp);
+    lcd.print(" C");
+
+    lcd.setCursor(0, 1);
+    lcd.print("Humidity: ");
+    lcd.print(hum);
+    lcd.print(" %");
+}
+
+void waterPlants()
+{
+    lcd.clear();
+    lcd.print("Watering Plant A");
+    moveStepperTo(0); // Move stepper to Plant A position
+    pumpOn();
+    delay(5000); // Water Plant A for 5 seconds
     pumpOff();
 
-    // Simulate LCD Initialization with Serial Monitor
-    Serial.println("System Init..."); // Display initialization message
-    delay(2000);                      // Wait for 2 seconds
-    Serial.println("Ready");          // Indicate system is ready
+    delay(2000); // Wait before switching to Plant B
+
+    lcd.clear();
+    lcd.print("Watering Plant B");
+    moveStepperTo(100); // Move stepper to Plant B position
+    pumpOn();
+    delay(5000); // Water Plant B for 5 seconds
+    pumpOff();
 }
 
-void displayReadings(float temp, float hum) {
-    // Simulated LCD output using Serial Monitor
-    Serial.print("Temp: ");
-    Serial.print(temp);
-    Serial.println("°C");
-
-    Serial.print("Humidity: ");
-    Serial.print(hum);
-    Serial.println("%");
+void moveStepperTo(int targetPosition)
+{
+    int stepsToMove = targetPosition - currentStepperPosition;
+    stepper.step(stepsToMove); // Move stepper
+    currentStepperPosition = targetPosition;
 }
 
-void waterPlants() {
-    // Water Plant A
-    Serial.println("Watering Plant A"); // Indicate which plant is being watered
-    moveStepperTo(0);                   // Move stepper to position for Plant A
-    pumpOn();                           // Turn on the water pump
-    delay(5000);                        // Water for 5 seconds
-    pumpOff();                          // Turn off the pump
-
-    delay(2000); // Wait 2 seconds before switching to the next plant
-
-    // Water Plant B
-    Serial.println("Watering Plant B"); // Indicate which plant is being watered
-    moveStepperTo(100);                 // Move stepper to position for Plant B
-    pumpOn();                           // Turn on the water pump
-    delay(5000);                        // Water for 5 seconds
-    pumpOff();                          // Turn off the pump
+void pumpOn()
+{
+    digitalWrite(pumpPin, HIGH); 
 }
 
-void stepMotor(int steps) {
-    // Move the stepper motor step by step
-    for (int i = 0; i < abs(steps); i++) {
-        if (steps > 0) { // Step forward
-            digitalWrite(stepperPin1, HIGH);
-            _delay_ms(1);
-            digitalWrite(stepperPin1, LOW);
-        } else { // Step backward
-            digitalWrite(stepperPin2, HIGH);
-            _delay_ms(1);
-            digitalWrite(stepperPin2, LOW);
-        }
+void pumpOff()
+{
+    digitalWrite(pumpPin, LOW); 
+}
+
+void goToSleep(unsigned long duration)
+{
+    unsigned long sleepCycles = duration / 8000; // Calculate number of 8-second cycles
+
+    while (sleepCycles > 0)
+    {
+        sodaq_wdt_reset(); // Reset watchdog before sleep
+        sodaq_wdt_safe_delay(8000); // Safe delay for 8 seconds
+        sleepCycles--;
     }
-    currentStepperPosition += steps; // Update the stepper position
 }
 
-void moveStepperTo(int targetPosition) {
-    // Move the stepper to a specific position
-    stepMotor(targetPosition - currentStepperPosition); // Calculate steps to move
-}
+void testComponents()
+{
+    lcd.clear();
+    lcd.print("Testing LCD");
+    delay(2000);
 
-void pumpOn() {
-    digitalWrite(pumpPin, HIGH); // Activate the pump
-}
-
-void pumpOff() {
-    digitalWrite(pumpPin, LOW); // Deactivate the pump
-}
-
-void goToSleep(unsigned long duration) {
-    // Enter low-power sleep mode using the Watchdog Timer
-    set_sleep_mode(SLEEP_MODE_PWR_DOWN); // Configure power-down mode
-    sleep_enable();                      // Enable sleep mode
-
-    unsigned long sleepCycles = duration / 8000; // Calculate the number of 8-second sleep cycles
-
-    while (sleepCycles > 0) {
-        // Configure watchdog timer for ~8-second timeout
-        WDTCSR = (1 << WDCE) | (1 << WDE);  // Enable watchdog changes
-        WDTCSR = (1 << WDP3) | (1 << WDP0); // Set timeout
-        WDTCSR |= (1 << WDIE);              // Enable interrupt
-
-        sleep_mode(); // Enter sleep mode
-        sleep_disable(); // Wake up
-        sleepCycles--; // Decrement sleep cycle counter
-    }
-
-    WDTCSR = 0x00; // Disable the watchdog timer after waking up
-}
-
-void testComponents() {
-    Serial.println("Testing Components...");
-
-    // Test Stepper Motor
-    Serial.println("Testing Stepper Motor...");
-    moveStepperTo(50);  // Move stepper halfway
-    delay(1000);        // Wait
-    moveStepperTo(0);   // Return to start
+    lcd.clear();
+    lcd.print("Testing Stepper");
+    moveStepperTo(50); // Test Stepper movement
+    delay(1000);
+    moveStepperTo(0);  // Reset Stepper
     delay(1000);
 
-    // Test Pump
-    Serial.println("Testing Pump...");
-    pumpOn();           // Activate the pump
-    delay(2000);        // Run for 2 seconds
-    pumpOff();          // Deactivate the pump
+    lcd.clear();
+    lcd.print("Testing Pump");
+    pumpOn();          // Test Pump
+    delay(2000);
+    pumpOff();         // Turn off Pump
     delay(1000);
 
-    Serial.println("Component Tests Complete");
+    lcd.clear();
+    lcd.print("Tests Complete");
+    delay(2000);
 }
